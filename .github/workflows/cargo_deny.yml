@@ -1,0 +1,13 @@
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '13 15 * * *'
+jobs:
+  pyembed:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          arguments: "--manifest-path pyembed/Cargo.toml"

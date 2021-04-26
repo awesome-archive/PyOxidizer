@@ -1,0 +1,27 @@
+[package]
+name = "tugger-snapcraft"
+version = "0.4.0-pre"
+authors = ["Gregory Szorc <gregory.szorc@gmail.com>"]
+edition = "2018"
+license = "MPL-2.0"
+description = "Snapcraft packaging primitives"
+keywords = ["package", "snapcraft", "tugger"]
+homepage = "https://github.com/indygreg/PyOxidizer"
+repository = "https://github.com/indygreg/PyOxidizer.git"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0"
+duct = "0.13"
+remove_dir_all = "0.7"
+serde_yaml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+slog = "2.7"
+
+[dependencies.tugger-common]
+version = "0.4.0-pre"
+path = "../tugger-common"
+
+[dependencies.tugger-file-manifest]
+version = "0.3.0-pre"
+path = "../tugger-file-manifest"

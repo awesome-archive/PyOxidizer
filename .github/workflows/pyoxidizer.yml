@@ -1,0 +1,138 @@
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '13 15 * * *'
+jobs:
+  pyoxidizer:
+    strategy:
+      fail-fast: false
+      matrix:
+        rust_toolchain:
+          - 'stable'
+          - 'beta'
+          - 'nightly'
+          # Remember to update MINIMUM_RUST_VERSION in pyoxidizer/src/environment.rs
+          # and the `Installing Rust` documentation when this changes.
+          - '1.46.0'
+        os:
+          - 'ubuntu-20.04'
+          - 'macos-10.15'
+          - 'macos-11.0'
+          - 'windows-2019'
+        exclude:
+          - os: 'macos-11.0'
+            rust_toolchain: '1.46.0'
+          - os: 'macos-11.0'
+            rust_toolchain: 'beta'
+          - os: 'macos-11.0'
+            rust_toolchain: 'nightly'
+    continue-on-error: ${{ matrix.rust_toolchain == 'nightly' }}
+    runs-on: ${{ matrix.os }}
+    env:
+      IN_CI: '1'
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      SCCACHE_BUCKET: 'pyoxidizer-sccache'
+      SCCACHE_S3_USE_SSL: '1'
+      # Prevent sccache server from stopping due to inactivity.
+      SCCACHE_IDLE_TIMEOUT: '0'
+    steps:
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y libyaml-dev snapcraft
+
+      - uses: actions/checkout@v2
+        with:
+          # Needed by build.rs, which needs to walk the Git history to find the
+          # root commit. Without this, a shallow clone (depth=1) is performed.
+          fetch-depth: 0
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust_toolchain }}
+          default: true
+          profile: minimal
+          components: clippy
+
+      - uses: actions-rs/toolchain@v1
+        if: runner.os == 'Linux'
+        with:
+          toolchain: ${{ matrix.rust_toolchain }}
+          profile: minimal
+          target: x86_64-unknown-linux-musl
+
+      - name: Cache sccache (Windows)
+        id: cache-sccache-windows
+        if: runner.os == 'Windows'
+        uses: actions/cache@v2
+        with:
+          path: C:/Rust/.cargo/bin/sccache.exe
+          key: ${{ runner.os }}-sccache-0
+
+      - name: Install sccache build dependencies (Windows)
+        if: runner.os == 'Windows' && steps.cache-sccache-windows.outputs.cache-hit != 'true'
+        run: |
+          vcpkg integrate install
+          vcpkg install openssl:x64-windows
+
+      - name: Install sccache (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          wget -O sccache.tar.gz --progress dot:mega https://github.com/mozilla/sccache/releases/download/0.2.13/sccache-0.2.13-x86_64-unknown-linux-musl.tar.gz
+          tar -xvzf sccache.tar.gz
+          mv sccache-0.2.13-x86_64-unknown-linux-musl/sccache /usr/share/rust/.cargo/bin/sccache
+
+      - name: Install sccache (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          wget -O sccache.tar.gz --progress dot:mega https://github.com/mozilla/sccache/releases/download/0.2.13/sccache-0.2.13-x86_64-apple-darwin.tar.gz
+          tar -xvzf sccache.tar.gz
+          mv sccache-0.2.13-x86_64-apple-darwin/sccache /Users/runner/.cargo/bin/sccache
+
+      - name: Install sccache (Windows)
+        if: steps.cache-sccache-windows.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        # sccache doesn't work with Rust 1.48. https://github.com/mozilla/sccache/issues/887
+        run: |
+          rustup install 1.47.0
+          cargo +1.47.0 install --features 'azure s3' sccache
+
+      - name: Start sccache
+        run: |
+          sccache --start-server
+
+      - name: Build Workspace
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          rustc --version
+          cargo build --release --workspace --exclude pyembed --exclude oxidized-importer
+          cargo test --release --workspace --exclude pyembed --exclude oxidized-importer --no-run
+
+      - name: Test Workspace
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          cargo test --release --workspace --exclude pyembed --exclude oxidized-importer
+
+      # To minimize potential for Python interference, we delay install Python
+      # until we need it for pyembed.
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Test pyembed
+        run: |
+          python scripts/run-pyembed-tests.py
+
+      - uses: actions-rs/clippy@master
+        if: ${{ matrix.rust_toolchain == 'stable' || matrix.rust_toolchain == 'beta' }}
+        env:
+          RUSTC_WRAPPER: sccache
+        with:
+          args: --release --workspace --exclude oxidized-importer
+
+      - name: Stop sccache
+        run: |
+          sccache --stop-server

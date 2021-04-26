@@ -4,47 +4,119 @@
 
 //! Resolve details about the PyOxidizer execution environment.
 
-use git2::{Commit, Repository};
-use lazy_static::lazy_static;
-use std::env;
-use std::path::{Path, PathBuf};
+use {
+    crate::project_layout::PyembedLocation,
+    anyhow::{anyhow, Context, Result},
+    once_cell::sync::Lazy,
+    semver::Version,
+    slog::{info, warn},
+    std::{
+        env,
+        ops::Deref,
+        path::{Path, PathBuf},
+        sync::{Arc, RwLock},
+    },
+    tugger_apple::{find_command_line_tools_sdks, find_default_developer_sdks, AppleSdk},
+    tugger_rust_toolchain::install_rust_toolchain,
+};
 
-pub const PYOXIDIZER_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Version string of PyOxidizer's crate from its Cargo.toml.
+const PYOXIDIZER_CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Canonical Git repository for PyOxidizer.
-const CANONICAL_GIT_REPO_URL: &str = "https://github.com/indygreg/PyOxidizer.git";
+/// Version string of pyembed crate from its Cargo.toml.
+const PYEMBED_CRATE_VERSION: &str = "0.14.0-pre";
 
-/// Root Git commit for PyOxidizer.
-const ROOT_COMMIT: &str = "b1f95017c897e0fd3ed006aec25b6886196a889d";
+/// URL of Git repository we were built from.
+const GIT_REPO_URL: &str = env!("GIT_REPO_URL");
+
+/// Version string of PyOxidizer.
+pub const PYOXIDIZER_VERSION: &str = env!("PYOXIDIZER_VERSION");
+
+/// Filesystem path to Git repository we were built from.
+///
+/// Will be None if a path is defined in the environment but not present.
+pub static BUILD_GIT_REPO_PATH: Lazy<Option<PathBuf>> = Lazy::new(|| {
+    match env!("GIT_REPO_PATH") {
+        "" => None,
+        value => {
+            let path = PathBuf::from(value);
+
+            // There is a potential for false positives here. e.g. shared checkout
+            // directories. But hopefully that should be rare.
+            if path.exists() {
+                Some(path)
+            } else {
+                None
+            }
+        }
+    }
+});
 
 /// Git commit this build of PyOxidizer was produced with.
-pub const BUILD_GIT_COMMIT: &str = env!("VERGEN_SHA");
-
-/// Semantic version for this build of PyOxidizer. Can correspond to a Git
-/// tag or version string from Cargo.toml.
-pub const BUILD_SEMVER: &str = env!("VERGEN_SEMVER");
-
-/// Semantic version for this build of PyOxidizer. Usually of form
-/// <tag>-<count>-<short sha>.
-pub const BUILD_SEMVER_LIGHTWEIGHT: &str = env!("VERGEN_SEMVER_LIGHTWEIGHT");
-
-lazy_static! {
-    /// Minimum version of Rust required to build PyOxidizer applications.
-    pub static ref MINIMUM_RUST_VERSION: semver::Version = semver::Version::new(1, 34, 0);
-}
-
-/// Find the root Git commit given a starting Git commit.
-///
-/// This just walks parents until it gets to a commit without any.
-fn find_root_git_commit(commit: Commit) -> Commit {
-    let mut current = commit;
-
-    while current.parent_count() != 0 {
-        current = current.parents().next().unwrap();
+pub static BUILD_GIT_COMMIT: Lazy<Option<String>> = Lazy::new(|| {
+    match env!("GIT_COMMIT") {
+        // Can happen when not run from a Git checkout (such as installing
+        // from a crate).
+        "" => None,
+        value => Some(value.to_string()),
     }
+});
 
-    current
-}
+/// The Git tag we are built against.
+pub static BUILD_GIT_TAG: Lazy<Option<String>> = Lazy::new(|| {
+    let tag = env!("GIT_TAG");
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag.to_string())
+    }
+});
+
+/// Defines the source of this install from Git data embedded in the binary.
+pub static GIT_SOURCE: Lazy<PyOxidizerSource> = Lazy::new(|| {
+    let commit = BUILD_GIT_COMMIT.clone();
+
+    // Commit and tag should be mutually exclusive.
+    let tag = if commit.is_some() || BUILD_GIT_TAG.is_none() {
+        None
+    } else {
+        BUILD_GIT_TAG.clone()
+    };
+
+    PyOxidizerSource::GitUrl {
+        url: GIT_REPO_URL.to_owned(),
+        commit,
+        tag,
+    }
+});
+
+/// Minimum version of Rust required to build PyOxidizer applications.
+///
+// Remember to update the CI configuration in ci/azure-pipelines-template.yml
+// and the `Installing Rust` documentation when this changes.
+pub static MINIMUM_RUST_VERSION: Lazy<semver::Version> =
+    Lazy::new(|| semver::Version::new(1, 46, 0));
+
+/// Version of Rust toolchain to use for our managed Rust install.
+pub const RUST_TOOLCHAIN_VERSION: &str = "1.51.0";
+
+/// Target triples for Linux.
+pub static LINUX_TARGET_TRIPLES: Lazy<Vec<&'static str>> =
+    Lazy::new(|| vec!["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]);
+
+/// Target triples for macOS.
+pub static MACOS_TARGET_TRIPLES: Lazy<Vec<&'static str>> =
+    Lazy::new(|| vec!["aarch64-apple-darwin", "x86_64-apple-darwin"]);
+
+/// Target triples for Windows.
+pub static WINDOWS_TARGET_TRIPLES: Lazy<Vec<&'static str>> = Lazy::new(|| {
+    vec![
+        "i686-pc-windows-gnu",
+        "i686-pc-windows-msvc",
+        "x86_64-pc-windows-gnu",
+        "x86_64-pc-windows-msvc",
+    ]
+});
 
 pub fn canonicalize_path(path: &Path) -> Result<PathBuf, std::io::Error> {
     let mut p = path.canonicalize()?;
@@ -63,6 +135,7 @@ pub fn canonicalize_path(path: &Path) -> Result<PathBuf, std::io::Error> {
 }
 
 /// Describes the location of the PyOxidizer source files.
+#[derive(Clone, Debug)]
 pub enum PyOxidizerSource {
     /// A local filesystem path.
     LocalPath { path: PathBuf },
@@ -75,89 +148,382 @@ pub enum PyOxidizerSource {
     },
 }
 
+impl Default for PyOxidizerSource {
+    fn default() -> Self {
+        if let Some(path) = BUILD_GIT_REPO_PATH.as_ref() {
+            Self::LocalPath { path: path.clone() }
+        } else {
+            GIT_SOURCE.clone()
+        }
+    }
+}
+
+impl PyOxidizerSource {
+    /// Determine the location of the pyembed crate given a run-time environment.
+    ///
+    /// If running from a PyOxidizer Git repository, we reference the pyembed
+    /// crate within the PyOxidizer Git repository. Otherwise we use the pyembed
+    /// crate from the package registry.
+    ///
+    /// There is room to reference a Git repository+commit. But this isn't implemented
+    /// yet.
+    pub fn as_pyembed_location(&self) -> PyembedLocation {
+        match self {
+            PyOxidizerSource::LocalPath { path } => {
+                PyembedLocation::Path(canonicalize_path(&path.join("pyembed")).unwrap())
+            }
+            PyOxidizerSource::GitUrl { url, commit, .. } => match commit {
+                Some(commit) => PyembedLocation::Git(url.clone(), commit.clone()),
+                None => PyembedLocation::Version(PYEMBED_CRATE_VERSION.to_string()),
+            },
+        }
+    }
+
+    /// Obtain a string to be used as the long form version info for the executable.
+    pub fn version_long(&self) -> String {
+        format!(
+            "{}\ncommit: {}\nsource: {}\npyembed crate location: {}",
+            PYOXIDIZER_CRATE_VERSION,
+            if let Some(commit) = BUILD_GIT_COMMIT.as_ref() {
+                commit.as_str()
+            } else {
+                "unknown"
+            },
+            match self {
+                PyOxidizerSource::LocalPath { path } => {
+                    format!("{}", path.display())
+                }
+                PyOxidizerSource::GitUrl { url, .. } => {
+                    url.clone()
+                }
+            },
+            self.as_pyembed_location().cargo_manifest_fields(),
+        )
+    }
+}
+
 /// Describes the PyOxidizer run-time environment.
+#[derive(Clone, Debug)]
 pub struct Environment {
     /// Where a copy of PyOxidizer can be obtained from.
     pub pyoxidizer_source: PyOxidizerSource,
 
-    /// Semantic version string for PyOxidizer.
-    pub pyoxidizer_semver: String,
+    /// Directory to use for caching things.
+    cache_dir: PathBuf,
+
+    /// Whether we should use a Rust installation we manage ourselves.
+    managed_rust: bool,
+
+    /// Rust environment to use.
+    ///
+    /// Cached because lookups may be expensive.
+    rust_environment: Arc<RwLock<Option<RustEnvironment>>>,
 }
 
-/// Obtain a PyOxidizerSource pointing to the GitUrl this binary was built with.
-pub fn built_git_url() -> PyOxidizerSource {
-    let commit = match BUILD_GIT_COMMIT {
-        // Can happen when not run from a Git checkout (such as installing
-        // from a crate).
-        "" => None,
-        // Can happen if `git` is not available at build time.
-        "UNKNOWN" => None,
-        value => Some(value.to_string()),
-    };
+impl Environment {
+    /// Obtain a new instance.
+    pub fn new() -> Result<Self> {
+        let pyoxidizer_source = PyOxidizerSource::default();
 
-    // Commit and tag should be mutually exclusive. BUILD_SEMVER could be
-    // derived by a Git tag in some circumstances. More commonly it is
-    // derived from Cargo.toml. The Git tags have ``v`` prefixes.
-    let tag = if commit.is_some() {
-        None
-    } else {
-        if !BUILD_SEMVER.starts_with("v") {
-            Some("v".to_string() + BUILD_SEMVER)
+        let cache_dir = if let Ok(p) = std::env::var("PYOXIDIZER_CACHE_DIR") {
+            PathBuf::from(p)
+        } else if let Some(cache_dir) = dirs::cache_dir() {
+            cache_dir.join("pyoxidizer")
         } else {
-            Some(BUILD_SEMVER.to_string())
-        }
-    };
+            dirs::home_dir().ok_or_else(|| anyhow!("could not resolve home dir as part of resolving PyOxidizer cache directory"))?.join(".pyoxidizer").join("cache")
+        };
 
-    PyOxidizerSource::GitUrl {
-        url: CANONICAL_GIT_REPO_URL.to_owned(),
-        commit,
-        tag,
+        let managed_rust = std::env::var("PYOXIDIZER_SYSTEM_RUST").is_err();
+
+        Ok(Self {
+            pyoxidizer_source,
+            cache_dir,
+            managed_rust,
+            rust_environment: Arc::new(RwLock::new(None)),
+        })
+    }
+
+    /// Cache directory for PyOxidizer to use.
+    ///
+    /// The cache is per-user but multi-process.
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
+    /// Directory to use for storing Python distributions.
+    pub fn python_distributions_dir(&self) -> PathBuf {
+        self.cache_dir.join("python_distributions")
+    }
+
+    /// Directory to hold Rust toolchains.
+    pub fn rust_dir(&self) -> PathBuf {
+        self.cache_dir.join("rust")
+    }
+
+    /// Do not use a managed Rust.
+    ///
+    /// When called, [self.ensure_rust_toolchain()] will attempt to locate a
+    /// Rust install on the system rather than manage it itself.
+    pub fn unmanage_rust(&mut self) -> Result<()> {
+        self.managed_rust = false;
+        self.rust_environment
+            .write()
+            .map_err(|e| anyhow!("unable to lock cached rust environment for writing: {}", e))?
+            .take();
+
+        Ok(())
+    }
+
+    /// Find an executable of the given name.
+    ///
+    /// Resolves to `Some(T)` if an executable was found or `None` if not.
+    ///
+    /// Errors if there were problems searching for executables.
+    pub fn find_executable(&self, name: &str) -> which::Result<Option<PathBuf>> {
+        match which::which(name) {
+            Ok(p) => Ok(Some(p)),
+            Err(which::Error::CannotFindBinaryPath) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Obtain the Rust target triple for the current machine.
+    fn rust_host_triple(&self) -> &str {
+        env!("HOST")
+    }
+
+    /// Ensure a Rust toolchain suitable for building is available.
+    pub fn ensure_rust_toolchain(
+        &self,
+        logger: &slog::Logger,
+        target_triple: Option<&str>,
+    ) -> Result<RustEnvironment> {
+        let mut cached = self
+            .rust_environment
+            .write()
+            .map_err(|e| anyhow!("failed to acquire rust environment lock: {}", e))?;
+
+        if cached.is_none() {
+            warn!(
+                logger,
+                "ensuring Rust toolchain {} is available", RUST_TOOLCHAIN_VERSION,
+            );
+
+            let rust_env = if self.managed_rust {
+                let target_triple = target_triple.unwrap_or_else(|| self.rust_host_triple());
+
+                let toolchain = install_rust_toolchain(
+                    logger,
+                    RUST_TOOLCHAIN_VERSION,
+                    self.rust_host_triple(),
+                    &[target_triple],
+                    &self.rust_dir(),
+                    Some(&self.rust_dir()),
+                )?;
+
+                RustEnvironment {
+                    cargo_exe: toolchain.cargo_path,
+                    rustc_exe: toolchain.rustc_path.clone(),
+                    rust_version: rustc_version::VersionMeta::for_command(
+                        std::process::Command::new(toolchain.rustc_path),
+                    )?,
+                }
+            } else {
+                self.system_rust_environment()?
+            };
+
+            cached.replace(rust_env);
+        }
+
+        Ok(cached
+            .deref()
+            .as_ref()
+            .expect("should have been populated above")
+            .clone())
+    }
+
+    /// Obtain the path to a `rustc` executable.
+    ///
+    /// This respects the `RUSTC` environment variable.
+    ///
+    /// Not exposed as public because we want all consumers of rustc to go
+    /// through validation logic in [self.rust_environment()].
+    fn rustc_exe(&self) -> which::Result<Option<PathBuf>> {
+        if let Some(v) = std::env::var_os("RUSTC") {
+            let p = PathBuf::from(v);
+
+            if p.exists() {
+                Ok(Some(p))
+            } else {
+                Err(which::Error::BadAbsolutePath)
+            }
+        } else {
+            self.find_executable("rustc")
+        }
+    }
+
+    /// Obtain the path to a `cargo` executable.
+    ///
+    /// Not exposed as public because we want all consumers of cargo to
+    /// go through validation logic in [self.rust_environment()].
+    fn cargo_exe(&self) -> which::Result<Option<PathBuf>> {
+        self.find_executable("cargo")
+    }
+
+    /// Return information about the system's Rust toolchain.
+    ///
+    /// This attempts to locate a Rust toolchain suitable for use with
+    /// PyOxidizer. If a toolchain could not be found or doesn't meet the
+    /// requirements, an error occurs.
+    fn system_rust_environment(&self) -> Result<RustEnvironment> {
+        let cargo_exe = self
+            .cargo_exe()
+            .context("finding cargo executable")?
+            .ok_or_else(|| anyhow!("cargo executable not found; is Rust installed and in PATH?"))?;
+
+        let rustc_exe = self
+            .rustc_exe()
+            .context("finding rustc executable")?
+            .ok_or_else(|| anyhow!("rustc executable not found; is Rust installed and in PATH?"))?;
+
+        let rust_version =
+            rustc_version::VersionMeta::for_command(std::process::Command::new(&rustc_exe))
+                .context("resolving rustc version")?;
+
+        if rust_version.semver.lt(&MINIMUM_RUST_VERSION) {
+            return Err(anyhow!(
+                "PyOxidizer requires Rust {}; {} is version {}",
+                *MINIMUM_RUST_VERSION,
+                rustc_exe.display(),
+                rust_version.semver
+            ));
+        }
+
+        Ok(RustEnvironment {
+            cargo_exe,
+            rustc_exe,
+            rust_version,
+        })
     }
 }
 
-pub fn resolve_environment() -> Result<Environment, &'static str> {
-    let exe_path = PathBuf::from(
-        env::current_exe()
-            .or_else(|_| Err("could not resolve current exe"))?
-            .parent()
-            .ok_or_else(|| "could not resolve parent of current exe")?,
+/// Represents an available Rust toolchain.
+#[derive(Clone, Debug)]
+pub struct RustEnvironment {
+    /// Path to `cargo` executable.
+    pub cargo_exe: PathBuf,
+
+    /// Path to `rustc` executable.
+    pub rustc_exe: PathBuf,
+
+    /// Describes rustc version info.
+    pub rust_version: rustc_version::VersionMeta,
+}
+
+/// Resolve an appropriate Apple SDK to use.
+///
+/// Given an Apple `platform`, locate an Apple SDK that is of least
+/// `minimum_version` and supports targeting `deployment_target`, which is likely
+/// an OS version string.
+pub fn resolve_apple_sdk(
+    logger: &slog::Logger,
+    platform: &str,
+    minimum_version: &str,
+    deployment_target: &str,
+) -> Result<AppleSdk> {
+    if minimum_version.split('.').count() != 2 {
+        return Err(anyhow!(
+            "expected X.Y minimum Apple SDK version; got {}",
+            minimum_version
+        ));
+    }
+
+    let minimum_semver = Version::parse(&format!("{}.0", minimum_version))?;
+
+    let mut sdks = find_default_developer_sdks()
+        .context("discovering Apple SDKs (default developer directory)")?;
+    if let Some(extra_sdks) =
+        find_command_line_tools_sdks().context("discovering Apple SDKs (command line tools)")?
+    {
+        sdks.extend(extra_sdks);
+    }
+
+    let target_sdks = sdks
+        .iter()
+        .filter(|sdk| !sdk.is_symlink && sdk.supported_targets.contains_key(platform))
+        .collect::<Vec<_>>();
+
+    info!(
+        logger,
+        "found {} total Apple SDKs; {} support {}",
+        sdks.len(),
+        target_sdks.len(),
+        platform,
     );
 
-    let pyoxidizer_semver = BUILD_SEMVER.to_string();
+    let mut candidate_sdks = target_sdks
+        .into_iter()
+        .filter(|sdk| {
+            let version = match sdk.version_as_semver() {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
 
-    let pyoxidizer_source = match Repository::discover(&exe_path) {
-        Ok(repo) => {
-            let head = repo.head().unwrap();
-            let commit = head.peel_to_commit().unwrap();
-            let root = find_root_git_commit(commit.clone());
+            if version < minimum_semver {
+                info!(
+                    logger,
+                    "ignoring SDK {} because it is too old ({} < {})",
+                    sdk.path.display(),
+                    sdk.version,
+                    minimum_version
+                );
 
-            if root.id().to_string() == ROOT_COMMIT {
-                PyOxidizerSource::LocalPath {
-                    path: canonicalize_path(
-                        repo.workdir()
-                            .ok_or_else(|| "unable to resolve Git workdir")?,
-                    )
-                    .or_else(|_| Err("unable to canonicalize path"))?,
-                }
+                false
+            } else if !sdk
+                .supported_targets
+                .get(platform)
+                // Safe because key was validated above.
+                .unwrap()
+                .valid_deployment_targets
+                .contains(&deployment_target.to_string())
+            {
+                info!(
+                    logger,
+                    "ignoring SDK {} because it doesn't support deployment target {}",
+                    sdk.path.display(),
+                    deployment_target
+                );
+
+                false
             } else {
-                // The pyoxidizer binary is in a directory that is in a Git repo that isn't
-                // pyoxidizer's. This could happen if running `pyoxidizer` from another
-                // project's Git repository. This commonly happens when running
-                // pyoxidizer as a library from a build script. Fall back to
-                // returning info embedded in the build.
-                built_git_url()
+                true
             }
-        }
-        Err(_) => {
-            // We're not running from a Git repo. Point to the canonical repo for the Git commit
-            // baked into the binary.
-            // TODO detect builds from forks via build.rs environment variable.
-            built_git_url()
-        }
-    };
+        })
+        .collect::<Vec<_>>();
+    candidate_sdks.sort_by(|a, b| {
+        b.version_as_semver()
+            .unwrap()
+            .cmp(&a.version_as_semver().unwrap())
+    });
 
-    Ok(Environment {
-        pyoxidizer_source,
-        pyoxidizer_semver,
-    })
+    if candidate_sdks.is_empty() {
+        Err(anyhow!(
+            "unable to find suitable Apple SDK supporting {}{} or newer",
+            platform,
+            minimum_version
+        ))
+    } else {
+        info!(
+            logger,
+            "found {} suitable Apple SDKs ({})",
+            candidate_sdks.len(),
+            candidate_sdks
+                .iter()
+                .map(|sdk| sdk.name.clone())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+
+        Ok(candidate_sdks[0].clone())
+    }
 }

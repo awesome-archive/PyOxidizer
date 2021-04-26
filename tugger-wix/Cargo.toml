@@ -1,0 +1,41 @@
+[package]
+name = "tugger-wix"
+version = "0.6.0-pre"
+authors = ["Gregory Szorc <gregory.szorc@gmail.com>"]
+edition = "2018"
+license = "MPL-2.0"
+description = "Interfaces to the WiX Toolset to produce Windows installers"
+keywords = ["package", "tugger", "windows", "wix", "wix-toolset"]
+homepage = "https://github.com/indygreg/PyOxidizer"
+repository = "https://github.com/indygreg/PyOxidizer.git"
+readme = "README.md"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0"
+duct = "0.13"
+once_cell = "1.7"
+slog = "2.7"
+url = "2.2"
+uuid = { version = "0.8", features = ["v4", "v5"] }
+xml-rs = "0.8"
+
+[dependencies.tugger-common]
+version = "0.4.0-pre"
+path = "../tugger-common"
+
+[dependencies.tugger-windows-codesign]
+version = "0.3.0-pre"
+path = "../tugger-windows-codesign"
+
+[dependencies.tugger-windows]
+version = "0.5.0-pre"
+path = "../tugger-windows"
+
+[dependencies.tugger-file-manifest]
+version = "0.3.0-pre"
+path = "../tugger-file-manifest"
+
+[dev-dependencies]
+msi = "0.3"
+tempfile = "3.2"

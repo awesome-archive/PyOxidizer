@@ -1,3 +1,29 @@
 [workspace]
-members = ["pyapp", "pyembed", "pyoxidizer"]
-exclude = ["third_party/rust-cpython"]
+members = [
+    'cryptographic-message-syntax',
+    'oxidized-importer',
+    'pyembed',
+    'pyoxidizer',
+    'python-packaging',
+    'python-packed-resources',
+    'release',
+    'starlark-dialect-build-targets',
+    'text-stub-library',
+    'tugger',
+    'tugger-apple',
+    'tugger-apple-bundle',
+    'tugger-apple-codesign',
+    'tugger-binary-analysis',
+    'tugger-code-signing',
+    'tugger-common',
+    'tugger-debian',
+    'tugger-file-manifest',
+    'tugger-licensing',
+    'tugger-licensing-net',
+    'tugger-rpm',
+    'tugger-rust-toolchain',
+    'tugger-snapcraft',
+    'tugger-windows',
+    'tugger-windows-codesign',
+    'tugger-wix',
+]

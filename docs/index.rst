@@ -8,7 +8,9 @@ dive into :ref:`getting_started` to learn how to start using
 
 The official home of the ``PyOxidizer`` project is
 https://github.com/indygreg/PyOxidizer. Official documentation lives
-at https://pyoxidizer.readthedocs.io/en/latest/index.html.
+at Read The Docs
+(`unreleased/latest commit <https://pyoxidizer.readthedocs.io/en/latest/index.html>`_,
+`last release <https://pyoxidizer.readthedocs.io/en/stable/index.html>`_).
 
 The `pyoxidizer-users <https://groups.google.com/forum/#!forum/pyoxidizer-users>`_
 mailing list is a forum for users to discuss all things PyOxidizer.
@@ -23,17 +25,20 @@ The creator and maintainer of ``PyOxidizer`` is
 .. toctree::
    :maxdepth: 2
 
-   overview
-   getting_started
-   managing_projects
-   packaging
-   packaging_pitfalls
-   distributing
-   config
-   faq
-   status
-   comparisons
-   contributing
-   history
+   pyoxidizer_overview
+   pyoxidizer_getting_started
+   pyoxidizer_managing_projects
+   pyoxidizer_config
+   pyoxidizer_packaging
+   pyoxidizer_distributing
+   oxidized_importer
+   pyoxidizer_packed_resources
    pyembed
-   technotes
+   pyoxidizer_rust
+   tugger
+   pyoxidizer_faq
+   pyoxidizer_status
+   pyoxidizer_comparisons
+   pyoxidizer_contributing
+   pyoxidizer_history
+   pyoxidizer_technotes

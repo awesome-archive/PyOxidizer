@@ -1,0 +1,32 @@
+[package]
+name = "tugger-windows-codesign"
+version = "0.3.0-pre"
+authors = ["Gregory Szorc <gregory.szorc@gmail.com>"]
+edition = "2018"
+license = "MPL-2.0"
+description = "Code signing on Windows platforms"
+keywords = ["tugger", "windows", "codesign", "authenticode", "signtool"]
+homepage = "https://github.com/indygreg/PyOxidizer"
+repository = "https://github.com/indygreg/PyOxidizer.git"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1.0"
+chrono = "0.4"
+duct = "0.13"
+p12 = "0.2"
+rcgen = "0.8"
+slog = "2.7"
+yasna = "0.3"
+
+[dependencies.tugger-common]
+version = "0.4.0-pre"
+path = "../tugger-common"
+
+[dependencies.tugger-windows]
+version = "0.5.0-pre"
+path = "../tugger-windows"
+
+[dev-dependencies]
+der-parser = "5"
+x509-parser = "0"

@@ -1,0 +1,50 @@
+[package]
+name = "tugger"
+version = "0.8.0-pre"
+authors = ["Gregory Szorc <gregory.szorc@gmail.com>"]
+edition = "2018"
+license = "MPL-2.0"
+description = "Package and distribute applications"
+keywords = ["package"]
+homepage = "https://github.com/indygreg/PyOxidizer"
+repository = "https://github.com/indygreg/PyOxidizer.git"
+readme = "README.md"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0"
+codemap = "0.1"
+codemap-diagnostic = "0.1"
+plist = "1.1"
+slog = "2.7"
+starlark = "0.3.1"
+tar = "0.4"
+walkdir = "2"
+
+[dependencies.starlark-dialect-build-targets]
+version = "0.4.0-pre"
+path = "../starlark-dialect-build-targets"
+
+[dependencies.tugger-apple-bundle]
+version = "0.3.0-pre"
+path = "../tugger-apple-bundle"
+
+[dependencies.tugger-common]
+version = "0.4.0-pre"
+path = "../tugger-common"
+
+[dependencies.tugger-snapcraft]
+version = "0.4.0-pre"
+path = "../tugger-snapcraft"
+
+[dependencies.tugger-windows]
+version = "0.5.0-pre"
+path = "../tugger-windows"
+
+[dependencies.tugger-wix]
+version = "0.6.0-pre"
+path = "../tugger-wix"
+
+[dependencies.tugger-file-manifest]
+version = "0.3.0-pre"
+path = "../tugger-file-manifest"

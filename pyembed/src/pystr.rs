@@ -1,1 +1,0 @@
-../../pyoxidizer/src/pyembed/pystr.rs

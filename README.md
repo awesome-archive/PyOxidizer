@@ -1,5 +1,7 @@
 # PyOxidizer
 
+[![Build Status](https://github.com/indygreg/PyOxidizer/workflows/.github/workflows/pyoxidizer.yml/badge.svg)](https://github.com/indygreg/PyOxidizer/actions)
+
 `PyOxidizer` is a utility for producing binaries that embed Python.
 The over-arching goal of `PyOxidizer` is to make complex packaging and
 distribution problems simple so application maintainers can focus on
@@ -44,14 +46,15 @@ Rust and people may not even know because they never see a `libpython`,
 
 ## Project Info
 
-The official home of the `PyOxidizer` project is
+:house: The official home of the `PyOxidizer` project is
 https://github.com/indygreg/PyOxidizer.
 
-Documentation (generated from the `docs/` directory) is available
+:notebook_with_decorative_cover: Documentation (generated from the `docs/` directory) is available
 at https://pyoxidizer.readthedocs.io/en/latest/index.html.
 
-The [pyoxidizer-users](https://groups.google.com/forum/#!forum/pyoxidizer-users)
+:speech_balloon: The [pyoxidizer-users](https://groups.google.com/forum/#!forum/pyoxidizer-users)
 mailing list is a forum for users to discuss all things PyOxidizer.
 
-If you want to financially contribute to PyOxidizer, do so
+:moneybag: If you want to financially contribute to PyOxidizer, do so
+via [GitHub Sponsors](https://github.com/sponsors/indygreg) or
 [on Patreon](https://www.patreon.com/indygreg).

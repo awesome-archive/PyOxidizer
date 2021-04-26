@@ -11,11 +11,14 @@ distribution and embedding it in a larger binary, oftentimes an executable.
 This library exposes that functionality to other tools.
 */
 
-pub mod analyze;
 pub mod environment;
 pub mod logging;
+pub mod project_building;
+pub mod project_layout;
 pub mod projectmgmt;
-pub mod pyrepackager;
+pub mod py_packaging;
 pub mod python_distributions;
+pub mod starlark;
 
-pub use pyrepackager::repackage::run_from_build;
+#[cfg(test)]
+mod testutil;

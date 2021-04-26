@@ -1,0 +1,270 @@
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '13 15 * * *'
+jobs:
+  linux-x86_64-bin:
+    runs-on: 'ubuntu-20.04'
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      SCCACHE_BUCKET: 'pyoxidizer-sccache'
+      SCCACHE_S3_USE_SSL: '1'
+    steps:
+      - name: Install system packages
+        run: |
+          sudo apt install -y --no-install-recommends musl-tools
+
+      - uses: actions/checkout@v2
+        with:
+          # Needed by build.rs, which needs to walk the Git history to find the
+          # root commit. Without this, a shallow clone (depth=1) is performed.
+          fetch-depth: 0
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          profile: minimal
+          target: x86_64-unknown-linux-musl
+
+      - name: Install sccache
+        run: |
+          wget -O sccache.tar.gz --progress dot:mega https://github.com/mozilla/sccache/releases/download/v0.2.15/sccache-v0.2.15-x86_64-unknown-linux-musl.tar.gz
+          tar -xvzf sccache.tar.gz
+          mv sccache-*/sccache /usr/share/rust/.cargo/bin/sccache
+          chmod +x /usr/share/rust/.cargo/bin/sccache
+          sccache --start-server
+
+      - name: Build pyoxidizer Executable
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          rustc --version
+          cargo build --target x86_64-unknown-linux-musl --release --bin pyoxidizer
+
+      - name: Stop sccache
+        continue-on-error: true
+        run: |
+          sccache --stop-server
+
+      - name: Upload Binary
+        uses: actions/upload-artifact@v2
+        with:
+          name: linux-x86_64-bin
+          path: target/x86_64-unknown-linux-musl/release/pyoxidizer
+
+  macos-exe:
+    strategy:
+      matrix:
+        target_triple:
+          - 'aarch64-apple-darwin'
+          - 'x86_64-apple-darwin'
+    runs-on: 'macos-10.15'
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      SCCACHE_BUCKET: 'pyoxidizer-sccache'
+      SCCACHE_S3_USE_SSL: '1'
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          # Needed by build.rs, which needs to walk the Git history to find the
+          # root commit. Without this, a shallow clone (depth=1) is performed.
+          fetch-depth: 0
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          profile: minimal
+          target: ${{ matrix.target_triple }}
+
+      - name: Install sccache
+        run: |
+          wget -O sccache.tar.gz --progress dot:mega https://github.com/mozilla/sccache/releases/download/v0.2.15/sccache-v0.2.15-x86_64-apple-darwin.tar.gz
+          tar -xvzf sccache.tar.gz
+          mv sccache-*/sccache /Users/runner/.cargo/bin/sccache
+          chmod +x /Users/runner/.cargo/bin/sccache
+          sccache --start-server
+
+      - name: Build pyoxidizer Executable
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          case "${{ matrix.target_triple }}" in
+            aarch64-apple-darwin)
+              export SDKROOT=/Applications/Xcode_12.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX11.1.sdk
+              export OSX_DEPLOYMENT_TARGET=11.0
+              ;;
+            x86_64-apple-darwin)
+              export OSX_DEPLOYMENT_TARGET=10.9
+              ;;
+            *)
+              echo "unhandled target triple: ${{ matrix.target_triple }}"
+              exit 1
+              ;;
+          esac
+
+          rustc --version
+          cargo build --target ${{ matrix.target_triple }} --release --bin pyoxidizer
+
+          mkdir -p dist/${{ matrix.target_triple }}
+          mv target/${{ matrix.target_triple }}/release/pyoxidizer dist/${{ matrix.target_triple }}/
+
+      - name: Upload Executable
+        uses: actions/upload-artifact@v2
+        with:
+          name: macos_exes
+          path: |
+            dist/*/*
+
+  macos-universal-exe:
+    needs:
+      - macos-exe
+    runs-on: 'macos-10.15'
+    steps:
+      - name: Download CLI exes
+        uses: actions/download-artifact@v2
+        with:
+          name: macos_exes
+          path: inputs
+
+      - name: Produce Universal Binary
+        run: |
+          mkdir -p dist/macos-universal
+          lipo inputs/*/pyoxidizer -create -output dist/macos-universal/pyoxidizer
+          chmod +x dist/macos-universal/pyoxidizer
+          lipo dist/macos-universal/pyoxidizer -info
+
+      - name: Upload Universal Executable
+        uses: actions/upload-artifact@v2
+        with:
+          name: macos_universal_exe
+          path: dist/*/pyoxidizer
+
+  macos-dmg:
+    needs:
+      - macos-exe
+    runs-on: 'macos-10.15'
+    env:
+      IN_CI: '1'
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Download CLI exes
+        uses: actions/download-artifact@v2
+        with:
+          name: macos_exes
+          path: dist
+
+      - name: Build DMG
+        run: |
+          scripts/make-dmg.sh
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v2
+        with:
+          name: macos_dmg
+          path: |
+            PyOxidizer.dmg
+
+  windows-exe:
+    strategy:
+      matrix:
+        target_triple:
+          - 'i686-pc-windows-msvc'
+          - 'x86_64-pc-windows-msvc'
+    runs-on: 'windows-2019'
+    env:
+      IN_CI: '1'
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      SCCACHE_BUCKET: 'pyoxidizer-sccache'
+      SCCACHE_S3_USE_SSL: '1'
+      # Prevent sccache server from stopping due to inactivity.
+      SCCACHE_IDLE_TIMEOUT: '0'
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          # Needed by build.rs, which needs to walk the Git history to find the
+          # root commit. Without this, a shallow clone (depth=1) is performed.
+          fetch-depth: 0
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          profile: minimal
+          target: ${{ matrix.target_triple }}
+
+      - name: Cache sccache (Windows)
+        id: cache-sccache
+        uses: actions/cache@v2
+        with:
+          path: C:/Rust/.cargo/bin/sccache.exe
+          key: ${{ runner.os }}-sccache-0
+
+      - name: Install sccache build dependencies
+        if: steps.cache-sccache.outputs.cache-hit != 'true'
+        run: |
+          vcpkg integrate install
+          vcpkg install openssl:x64-windows
+
+      - name: Install sccache (Windows)
+        if: steps.cache-sccache.outputs.cache-hit != 'true'
+        run: |
+          cargo install --features 's3' sccache
+
+      - name: Start sccache
+        run: |
+          sccache --start-server
+
+      - name: Build Executable
+        env:
+          RUSTC_WRAPPER: sccache
+        run: |
+          rustc --version
+          cargo build --target ${{ matrix.target_triple }} --release --bin pyoxidizer
+
+          New-Item -ItemType "directory" -Name "dist/${{ matrix.target_triple}}"
+          move target/${{ matrix.target_triple }}/release/pyoxidizer.exe dist/${{ matrix.target_triple }}
+
+      - name: Upload Executable
+        uses: actions/upload-artifact@v2
+        with:
+          name: windows_exes
+          path: |
+            dist/*/*
+
+  windows-installer:
+    needs:
+      - windows-exe
+    runs-on: 'windows-2019'
+    env:
+      IN_CI: '1'
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Download CLI exes
+        uses: actions/download-artifact@v2
+        with:
+          name: windows_exes
+          path: dist
+
+      # We can use the built/downloaded pyoxidizer.exe to package itself. Nice.
+      # Building the exe installer will build the MSI installers. 2 birds 1 stone.
+      - name: Build Installers
+        run: |
+          dist/x86_64-pc-windows-msvc/pyoxidizer.exe build --var-env IN_CI IN_CI --release --target-triple x86_64-pc-windows-msvc exe_installer
+          move build/x86_64-pc-windows-msvc/release/*/*.msi .
+          move build/x86_64-pc-windows-msvc/release/*/*.exe .
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v2
+        with:
+          name: windows_installers
+          path: |
+            *.exe
+            *.msi
